@@ -102,6 +102,7 @@ def _blend_channel(fg, mask, bg, rescale=False):
         return target_updates
 
     # Construct COO Sparse matrix from gradient constraints
+    # * Note, during the writeup, I realize that I probably am leaving out one pixel on the edges since I never compute source gradient off mask. Oh well..
     var_y = mask.sum(1)
     for y in range(fg_h):
         if var_y[y] == 0:
@@ -249,6 +250,10 @@ if __name__ == '__main__':
         bg = bg / 255.
         mask = (mask.sum(axis=2, keepdims=True) > 0)
 
+        if fg.shape[2] == 4:
+            fg = fg[:, :, :3] # no alpha channel
+        if bg.shape[2] == 4:
+            bg = bg[:, :, :3]
         blend_img = poisson_blend(fg, mask, bg)
 
         plt.subplot(121)
@@ -273,6 +278,11 @@ if __name__ == '__main__':
 
         fg = fg / 255.
         bg = bg / 255.
+
+        if fg.shape[2] == 4:
+            fg = fg[:, :, :3] # no alpha channel
+        if bg.shape[2] == 4:
+            bg = bg[:, :, :3]
         mask = (mask.sum(axis=2, keepdims=True) > 0)
 
         blend_img = mixed_blend(fg, mask, bg)

@@ -91,10 +91,10 @@ def create_mask(imname):
         elif pressed_key == ord('i'):
             # loop over the rotation angles again, this time ensuring
             # no part of the image is cut off
-            angle = (angle - delta_angle) % 360  
+            angle = (angle - delta_angle) % 360
             adjusted = True
             print("Rotate")
-        
+
         # Plus
         elif pressed_key == ord('='):
             total_resize = total_resize*resize_factor
@@ -106,7 +106,7 @@ def create_mask(imname):
             total_resize = total_resize*(1/resize_factor)
             adjusted = True
             print("Resize down")
-        
+
 
         elif pressed_key == ord('r'):
             img = np.array(reset_orig_img)
@@ -129,7 +129,7 @@ def create_mask(imname):
             img = cv2.warpAffine(img,M,(cols,rows))
             cv2.imshow('image', img)
             adjusted = False
-            
+
 
     cv2.destroyAllWindows()
     name = imname.split('/')[-1]
@@ -150,7 +150,7 @@ def create_mask(imname):
     M = cv2.getRotationMatrix2D((cols/2,rows/2),angle,1)
     adj_orig_img = cv2.resize(reset_orig_img, dsize=(0,0), fx=total_resize, fy=total_resize)
     adj_orig_img = cv2.warpAffine(adj_orig_img,M,(cols,rows))
-    
+
     return masks_to_ret, adj_orig_img
 
 def paste_mask(im2name, masks_to_ret, im2=None):
@@ -188,7 +188,7 @@ def paste_mask(im2name, masks_to_ret, im2=None):
         pressed_key = cv2.waitKey(20) & 0xFF
 
         if pressed_key == 27:
-            break 
+            break
         if pressed_key == ord('r'):
             img = np.array(orig_img)
             im2masks_to_ret["centers"] = []
@@ -228,6 +228,21 @@ def save_masks(im1name, im2name):
     return source_mask, target_mask, source_im
 
 # Example usage
-imname = "./data/source_01.jpg"
-im2name = "./data/target_01.jpg"
+# imname = "./data/source_01.jpg"
+# im2name = "./data/target_01.jpg"
+
+imname = "./data/cake.jpg"
+im2name = "./data/orbit.jpg"
+
+imname = "./data/cake_noalpha.jpg"
+im2name = "./data/orbit.jpg"
+
+imname = "./data/penguin.jpg"
+# im2name = "./data/plane.jpg"
+im2name = "./data/plane2.jpg"
+im2name = "./data/sky.jpg"
+
+imname = "./data/apple.jpg"
+im2name = "./data/windows.jpg"
+
 save_masks(imname, im2name)
