@@ -67,10 +67,15 @@ def poisson_blend(fg, mask, bg):
     outs = []
     for c in range(fg.shape[2]):
         outs.append(_blend_channel(fg[:, :, c], mask[..., 0], bg[:, :, c]))
-    import pdb;pdb.set_trace()
-    return np.stack(outs, axis=2)
 
-def _blend_channel(fg, mask, bg):
+    out = np.stack(outs, axis=2)
+    # rescale
+    # out = (out - min(out.min(), 0)) / (max(out.max(), 1) - min(out.min(), 0))
+
+    return out
+
+# def _blend_channel(fg, mask, bg, rescale=True):
+def _blend_channel(fg, mask, bg, rescale=False):
     """
     Blend a single channel.
     :param fg: (H, W) source texture / foreground object
@@ -84,6 +89,18 @@ def _blend_channel(fg, mask, bg):
     fg_h, fg_w = fg.shape
     fg2var = np.arange(fg_h * fg_w).reshape((fg_h, fg_w)).astype(int)
 
+    def extract_boundary_updates(constraint_matrix, out_size):
+        # assumes constraint matrix (Eq x Pixels) has been subsetted such that there is at most one active variable in each row
+        # returns a vector of updates to the target matrix
+        constraint_x, constraint_y, constraint_values = sparse.find(constraint_matrix)
+        target_updates = constraint_values * bg.flatten()[constraint_y]
+        target_mask = ~mask.flatten()[constraint_y]
+        target_updates_values = target_updates[target_mask]
+        target_update_x = constraint_x[target_mask]
+        target_updates = np.zeros(out_size)
+        target_updates[target_update_x] = -target_updates_values
+        return target_updates
+
     # Construct COO Sparse matrix from gradient constraints
     var_y = mask.sum(1)
     for y in range(fg_h):
@@ -95,21 +112,34 @@ def _blend_channel(fg, mask, bg):
         coo_left = sparse.coo_matrix((np.full(coord_x.shape, -1), (coord_x, coord_y_left)), shape=(fg_w-1, fg_w * fg_h))
         coo_right = sparse.coo_matrix((np.full(coord_x.shape, 1), (coord_x, coord_y_right)), shape=(fg_w-1, fg_w * fg_h))
         constraint_matrix = coo_left + coo_right
+        constraint_matrix = constraint_matrix[mask[y, :-1], :] # only keep constraints with variables
 
-        # import pdb;pdb.set_trace()
-        # target_updates = -(constraint_matrix.toarray() * bg.flatten()[None, :])[:, ~mask.flatten()]
-        # target_update_mask = ((target_updates != 0).sum(axis=1) == 1)
-        # target_matrix = target_updates[target_update_mask].flatten()
-
-
-        # Slice out non-variables-targets using mask
-        constraint_matrix = constraint_matrix[:, mask.flatten()]
-        constraint_matrix = constraint_matrix[mask[y, :-1], :]
+        target_updates = extract_boundary_updates(constraint_matrix, mask[y,:-1].sum())
+        constraint_matrix = constraint_matrix[:, mask.flatten()] # only optimize with other variables
         constraints.append(constraint_matrix)
 
-        target_matrix = (np.roll(bg[y], -1) - bg[y])[:-1][mask[y, :-1]]
-        # update targets with boundary neighbors
+        target_matrix = (np.roll(fg[y], -1) - fg[y])[:-1][mask[y, :-1]]
+        target_matrix = target_matrix + target_updates
+        targets.append(target_matrix)
 
+        # Now do the other direction
+        # Actually, the only constraints that are different are the ones that are on the boundary
+        # For masking logic to work, our _reference_ must be the right coordinate this time
+        coord_y_right = fg2var[y][1:] # v_i
+        coord_y_left = np.roll(fg2var[y], 1)[1:] # v_j
+        coo_left = sparse.coo_matrix((np.full(coord_x.shape, 1), (coord_x, coord_y_left)), shape=(fg_w-1, fg_w * fg_h))
+        coo_right = sparse.coo_matrix((np.full(coord_x.shape, -1), (coord_x, coord_y_right)), shape=(fg_w-1, fg_w * fg_h))
+        constraint_matrix = coo_left + coo_right
+        constraint_matrix = constraint_matrix[mask[y, 1:], :] # only keep constraints with variables
+
+        target_updates = extract_boundary_updates(constraint_matrix, mask[y,1:].sum())
+        constraint_matrix = constraint_matrix[:, mask.flatten()] # only optimize with other variables
+        constraint_matrix = constraint_matrix[target_updates != 0]
+        constraints.append(constraint_matrix)
+
+        target_matrix = (fg[y] - np.roll(fg[y], 1))[1:][mask[y, 1:]]
+        target_matrix = target_matrix + target_updates
+        target_matrix = target_matrix[target_updates != 0]
 
         targets.append(target_matrix)
 
@@ -123,27 +153,49 @@ def _blend_channel(fg, mask, bg):
         coo_left = sparse.coo_matrix((np.full(coord_x.shape, -1), (coord_x, coord_y_left)), shape=(fg_h-1, fg_w * fg_h))
         coo_right = sparse.coo_matrix((np.full(coord_x.shape, 1), (coord_x, coord_y_right)), shape=(fg_h-1, fg_w * fg_h))
         constraint_matrix = coo_left + coo_right
+        constraint_matrix = constraint_matrix[mask[:-1, x], :] # only keep constraints with variables
 
-        # Slice out non-variables using mask
-        constraint_matrix = constraint_matrix[:, mask.flatten()]
-        constraint_matrix = constraint_matrix[mask[:-1, x], :]
+        target_updates = extract_boundary_updates(constraint_matrix, mask[:-1,x].sum())
+
+        constraint_matrix = constraint_matrix[:, mask.flatten()] # only optimize with other variables
         constraints.append(constraint_matrix)
 
-        target_matrix = (np.roll(bg[:, x], -1) - bg[:, x])[:-1][mask[:-1, x]]
-        # TODO update targets with boundary neighbors
+        target_matrix = (np.roll(fg[:, x], -1) - fg[:, x])[:-1][mask[:-1, x]]
+        target_matrix = target_matrix + target_updates
         targets.append(target_matrix)
 
-    # TODO consider that other neighbors also provide constraints?
+        # Now do the other direction
+        coord_y_right = fg2var[:, x][1:]
+        coord_y_left = np.roll(fg2var[:, x], 1)[1:]
+        coo_left = sparse.coo_matrix((np.full(coord_x.shape, 1), (coord_x, coord_y_left)), shape=(fg_h-1, fg_w * fg_h))
+        coo_right = sparse.coo_matrix((np.full(coord_x.shape, -1), (coord_x, coord_y_right)), shape=(fg_h-1, fg_w * fg_h))
+        constraint_matrix = coo_left + coo_right
+        constraint_matrix = constraint_matrix[mask[1:, x], :] # only keep constraints with variables
+
+        target_updates = extract_boundary_updates(constraint_matrix, mask[1:,x].sum())
+        constraint_matrix = constraint_matrix[:, mask.flatten()] # only optimize with other variables
+        # Only keep boundary updates
+        constraint_matrix = constraint_matrix[target_updates != 0]
+        constraints.append(constraint_matrix)
+
+        target_matrix = (fg[:, x] - np.roll(fg[:, x],1))[1:][mask[1:, x]]
+        target_matrix = target_matrix + target_updates
+        target_matrix = target_matrix[target_updates != 0]
+        targets.append(target_matrix)
 
     constraint_matrix = sparse.vstack(constraints)
     target_matrix = np.concatenate(targets, axis=0)
 
-    import pdb;pdb.set_trace()
     # Solve
     result = linalg.lsqr(constraint_matrix, target_matrix)[0]
     fg_new = fg.copy()
     fg_new[mask] = result
 
+    if rescale:
+        # if max < 1, use 1, if max > 1, use max
+        new_max = max(result.max(), 1)
+        new_min = min(result.min(), 0)
+        fg_new = (fg_new - new_min) / (new_max - new_min)
     return fg_new * mask + bg * (1 - mask)
 
 def mixed_blend(fg, mask, bg):
