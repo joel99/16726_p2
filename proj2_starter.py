@@ -64,8 +64,87 @@ def poisson_blend(fg, mask, bg):
     :param bg: (H, W, C) target image / background
     :return: (H, W, C)
     """
-    return fg * mask + bg * (1 - mask)
+    outs = []
+    for c in range(fg.shape[2]):
+        outs.append(_blend_channel(fg[:, :, c], mask[..., 0], bg[:, :, c]))
+    import pdb;pdb.set_trace()
+    return np.stack(outs, axis=2)
 
+def _blend_channel(fg, mask, bg):
+    """
+    Blend a single channel.
+    :param fg: (H, W) source texture / foreground object
+    :param mask: (H, W), 1 for foreground, 0 for background
+    :param bg: (H, W) target image / background
+    :return: (H, W)
+    """
+    constraints = []
+    targets = []
+
+    fg_h, fg_w = fg.shape
+    fg2var = np.arange(fg_h * fg_w).reshape((fg_h, fg_w)).astype(int)
+
+    # Construct COO Sparse matrix from gradient constraints
+    var_y = mask.sum(1)
+    for y in range(fg_h):
+        if var_y[y] == 0:
+            continue
+        coord_x = np.arange(fg_w-1) # constraint count
+        coord_y_left = fg2var[y][:-1] # v_j
+        coord_y_right = np.roll(fg2var[y], -1)[:-1] # v_i
+        coo_left = sparse.coo_matrix((np.full(coord_x.shape, -1), (coord_x, coord_y_left)), shape=(fg_w-1, fg_w * fg_h))
+        coo_right = sparse.coo_matrix((np.full(coord_x.shape, 1), (coord_x, coord_y_right)), shape=(fg_w-1, fg_w * fg_h))
+        constraint_matrix = coo_left + coo_right
+
+        # import pdb;pdb.set_trace()
+        # target_updates = -(constraint_matrix.toarray() * bg.flatten()[None, :])[:, ~mask.flatten()]
+        # target_update_mask = ((target_updates != 0).sum(axis=1) == 1)
+        # target_matrix = target_updates[target_update_mask].flatten()
+
+
+        # Slice out non-variables-targets using mask
+        constraint_matrix = constraint_matrix[:, mask.flatten()]
+        constraint_matrix = constraint_matrix[mask[y, :-1], :]
+        constraints.append(constraint_matrix)
+
+        target_matrix = (np.roll(bg[y], -1) - bg[y])[:-1][mask[y, :-1]]
+        # update targets with boundary neighbors
+
+
+        targets.append(target_matrix)
+
+    var_x = mask.sum(0)
+    for x in range(fg_w):
+        if var_x[x] == 0:
+            continue
+        coord_x = np.arange(fg_h-1)
+        coord_y_left = fg2var[:, x][:-1]
+        coord_y_right = np.roll(fg2var[:, x], -1)[:-1]
+        coo_left = sparse.coo_matrix((np.full(coord_x.shape, -1), (coord_x, coord_y_left)), shape=(fg_h-1, fg_w * fg_h))
+        coo_right = sparse.coo_matrix((np.full(coord_x.shape, 1), (coord_x, coord_y_right)), shape=(fg_h-1, fg_w * fg_h))
+        constraint_matrix = coo_left + coo_right
+
+        # Slice out non-variables using mask
+        constraint_matrix = constraint_matrix[:, mask.flatten()]
+        constraint_matrix = constraint_matrix[mask[:-1, x], :]
+        constraints.append(constraint_matrix)
+
+        target_matrix = (np.roll(bg[:, x], -1) - bg[:, x])[:-1][mask[:-1, x]]
+        # TODO update targets with boundary neighbors
+        targets.append(target_matrix)
+
+    # TODO consider that other neighbors also provide constraints?
+
+    constraint_matrix = sparse.vstack(constraints)
+    target_matrix = np.concatenate(targets, axis=0)
+
+    import pdb;pdb.set_trace()
+    # Solve
+    result = linalg.lsqr(constraint_matrix, target_matrix)[0]
+    fg_new = fg.copy()
+    fg_new[mask] = result
+
+    return fg_new * mask + bg * (1 - mask)
 
 def mixed_blend(fg, mask, bg):
     """EC: Mix gradient of source and target"""
@@ -84,7 +163,7 @@ def mixed_grad_color2gray(rgb_image):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Poisson blending.")
-    parser.add_argument("-q", "--question", default="toy", choices=["toy", "blend", "mixed", "color2gray"])
+    parser.add_argument("-q", "--question", default="blend", choices=["toy", "blend", "mixed", "color2gray"])
     # parser.add_argument("-q", "--question", required=True, choices=["toy", "blend", "mixed", "color2gray"])
     args, _ = parser.parse_known_args()
 
